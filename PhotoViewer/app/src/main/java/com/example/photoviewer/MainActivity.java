@@ -9,105 +9,137 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.io.PrintWriter;
 import java.net.HttpURLConnection;
-import java.net.Socket;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
-    private static final int MY_PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE = 1;
+
     ImageView imgView;
     TextView textView;
     String site_url = "http://10.0.2.2:8000";
-    static JSONObject post_json;
-    static String imageUrl = null;
     Bitmap bmImg = null;
     CloadImage taskDownload;
 
-    //PutPost taskUpload;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        //imgView= (ImageView) findViewById(R.id.imgView);
-        textView = (TextView) findViewById(R.id.textView);
+        textView = findViewById(R.id.textView);
+
+        // 앱 시작 시 토큰 확인
+        if (getAccessToken() == null) {
+            new LoginTask(true).execute(); // 로그인 후 자동 다운로드
+        } else {
+            new CloadImage().execute(site_url + "/api_root/Post/");
+        }
+    }
+
+    private void saveAccessToken(String token) {
+        getSharedPreferences("auth", MODE_PRIVATE)
+                .edit()
+                .putString("accessToken", token)
+                .apply();
+    }
+
+    private String getAccessToken() {
+        return getSharedPreferences("auth", MODE_PRIVATE)
+                .getString("accessToken", null);
     }
 
     public void onClickDownload(View v) {
-
         if (taskDownload != null && taskDownload.getStatus() == AsyncTask.Status.RUNNING) {
             taskDownload.cancel(true);
         }
         taskDownload = new CloadImage();
         taskDownload.execute(site_url + "/api_root/Post/");
-        Toast.makeText(getApplicationContext(), "Download", Toast.LENGTH_LONG).show();
-        new Thread(() -> {
-            try {
-                // 🔹 PC의 IP 주소 (에뮬레이터에서는 10.0.2.2 사용)
-                Socket socket = new Socket("10.0.2.2", 9999);
-
-                // 서버로 데이터 전송
-                PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-                out.println("/api_root/Post/");
-
-                // 서버로부터 응답 받기
-                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                StringBuilder response = new StringBuilder();
-                String line;
-                while ((line = in.readLine()) != null) {
-                    response.append(line);
-                }
-
-                socket.close();
-
-                // 결과를 UI에 표시
-                runOnUiThread(() -> {
-                    textView.setText(response.toString());
-                });
-
-            } catch (IOException e) {
-                e.printStackTrace();
-                runOnUiThread(() -> {
-                    textView.setText("소켓 서버 연결 실패");
-                });
-            }
-        }).start();
+        Toast.makeText(getApplicationContext(), "Download 시작", Toast.LENGTH_SHORT).show();
     }
 
     public void onClickUpload(View v) {
         String title = "테스트 제목";
-        String text = "이건 안드로이드에서 보낸 게시글 내용입니다.";
-        String imageUrl = ""; // ⚠️ ImageField 때문에 일단 비워둠
-        int authorId = 1;     // ⚠️ 실제 Django의 유저 ID로 변경 (예: admin 계정의 id)
+        String text = "안드로이드에서 보낸 게시글 내용";
+        String imageUrl = ""; // ImageField 비워둠
 
-        // 🔹 CloadImage 업로드 모드 실행
-        CloadImage taskUpload = new CloadImage(title, text, imageUrl);
-        taskUpload.execute(site_url + "/api_root/Post/");
-
-        Toast.makeText(getApplicationContext(), "Upload", Toast.LENGTH_LONG).show();
+        new CloadImage(title, text, imageUrl).execute(site_url + "/api_root/Post/");
+        Toast.makeText(getApplicationContext(), "Upload 시작", Toast.LENGTH_SHORT).show();
     }
 
-    private class CloadImage extends AsyncTask<String, Integer, List<Bitmap>> {
+    // --- 로그인 태스크 ---
+    private class LoginTask extends AsyncTask<Void, Void, String> {
+        boolean autoDownload;
+
+        public LoginTask(boolean autoDownload) {
+            this.autoDownload = autoDownload;
+        }
+
+        @Override
+        protected String doInBackground(Void... voids) {
+            try {
+                URL url = new URL(site_url + "/api/token/");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+
+                JSONObject body = new JSONObject();
+                body.put("username", "byh");
+                body.put("password", "1234");
+
+                OutputStream os = conn.getOutputStream();
+                os.write(body.toString().getBytes("UTF-8"));
+                os.close();
+
+                if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuilder result = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        result.append(line);
+                    }
+
+                    JSONObject json = new JSONObject(result.toString());
+                    return json.getString("access"); // JWT access token
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+
+        @Override
+        protected void onPostExecute(String token) {
+            if (token != null) {
+                saveAccessToken(token);
+                Toast.makeText(getApplicationContext(), "로그인 성공", Toast.LENGTH_SHORT).show();
+
+                // 로그인 후 자동 다운로드
+                if (autoDownload) {
+                    new CloadImage().execute(site_url + "/api_root/Post/");
+                }
+            } else {
+                Toast.makeText(getApplicationContext(), "로그인 실패", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    // --- 다운로드 / 업로드 공용 AsyncTask ---
+    private class CloadImage extends AsyncTask<String, Void, List<Bitmap>> {
+
         private boolean isUpload = false;
         private String uploadTitle;
         private String uploadContent;
@@ -122,90 +154,100 @@ public class MainActivity extends AppCompatActivity {
             this.uploadImageUrl = imageUrl;
         }
 
-        // 기존 다운로드용 기본 생성자
+        // 다운로드용 기본 생성자
         public CloadImage() {
             this.isUpload = false;
         }
 
-
         @Override
         protected List<Bitmap> doInBackground(String... urls) {
             if (isUpload) {
-                // --- 업로드 기능 ---
-                try {
-                    URL url = new URL(urls[0]); // 서버 API
-                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setRequestProperty("Authorization", "Token " + "bf46b8f9337d1d27b4ef2511514c798be1a954b8");
-                    conn.setDoOutput(true);
-
-                    JSONObject postData = new JSONObject();
-                    postData.put("author", site_url + "/api_root/User/1/");
-                    postData.put("title", uploadTitle);
-                    postData.put("text", uploadContent);
-                    postData.put("image", JSONObject.NULL);
-
-                    OutputStream os = conn.getOutputStream();
-                    os.write(postData.toString().getBytes("UTF-8"));
-                    os.flush();
-                    os.close();
-
-
-                    int responseCode = conn.getResponseCode();
-                    uploadSuccess = (responseCode == HttpURLConnection.HTTP_CREATED || responseCode == HttpURLConnection.HTTP_OK);
-
-                    // 업로드니까 이미지 리스트는 비워서 반환
-                    return responseCode == HttpURLConnection.HTTP_CREATED || responseCode == HttpURLConnection.HTTP_OK ? new ArrayList<>() : null;
-
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    uploadSuccess = false;
-                    return null;
-                }
+                return uploadPost(urls[0]);
             } else {
-                // --- 기존 다운로드 기능 ---
-                List<Bitmap> bitmapList = new ArrayList<>();
-                try {
-                    String apiUrl = urls[0];
-                    String token = "bf46b8f9337d1d27b4ef2511514c798be1a954b8";
-                    URL urlAPI = new URL(apiUrl);
-                    HttpURLConnection conn = (HttpURLConnection) urlAPI.openConnection();
-                    conn.setRequestProperty("Authorization", "Token " + token);
-                    conn.setRequestMethod("GET");
-                    conn.setConnectTimeout(3000);
-                    conn.setReadTimeout(3000);
-                    int responseCode = conn.getResponseCode();
-                    if (responseCode == HttpURLConnection.HTTP_OK) {
-                        InputStream is = conn.getInputStream();
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(is));
-                        StringBuilder result = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            result.append(line);
-                        }
-                        is.close();
-                        JSONArray aryJson = new JSONArray(result.toString());
-                        for (int i = 0; i < aryJson.length(); i++) {
-                            JSONObject post_json = (JSONObject) aryJson.get(i);
-                            String imageUrl = post_json.getString("image");
-                            if (!imageUrl.equals("")) {
-                                URL myImageUrl = new URL(imageUrl);
-                                conn = (HttpURLConnection) myImageUrl.openConnection();
-                                InputStream imgStream = conn.getInputStream();
-                                Bitmap imageBitmap = BitmapFactory.decodeStream(imgStream);
-                                bitmapList.add(imageBitmap);
-                                imgStream.close();
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-                return bitmapList;
+                return downloadPosts(urls[0]);
             }
         }
 
+        private List<Bitmap> uploadPost(String urlStr) {
+            try {
+                URL url = new URL(urlStr);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+
+                String token = getAccessToken();
+                conn.setRequestProperty("Authorization", "Bearer " + token);
+
+                conn.setDoOutput(true);
+
+                JSONObject postData = new JSONObject();
+                postData.put("author", site_url + "/api_root/User/1/");
+                postData.put("title", uploadTitle);
+                postData.put("text", uploadContent);
+                postData.put("image", JSONObject.NULL);
+
+                OutputStream os = conn.getOutputStream();
+                os.write(postData.toString().getBytes("UTF-8"));
+                os.flush();
+                os.close();
+
+                int responseCode = conn.getResponseCode();
+                uploadSuccess = (responseCode == HttpURLConnection.HTTP_CREATED || responseCode == HttpURLConnection.HTTP_OK);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                uploadSuccess = false;
+            }
+            return new ArrayList<>();
+        }
+
+        private List<Bitmap> downloadPosts(String urlStr) {
+            List<Bitmap> bitmapList = new ArrayList<>();
+            try {
+                URL urlAPI = new URL(urlStr);
+                HttpURLConnection conn = (HttpURLConnection) urlAPI.openConnection();
+                String token = getAccessToken();
+                conn.setRequestProperty("Authorization", "Bearer " + token);
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+
+                int responseCode = conn.getResponseCode();
+
+                if (responseCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
+                    // 토큰이 만료되거나 없으면 로그인 후 재시도
+                    new LoginTask(true).execute();
+                    return bitmapList;
+                }
+
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuilder result = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        result.append(line);
+                    }
+
+                    JSONArray aryJson = new JSONArray(result.toString());
+                    for (int i = 0; i < aryJson.length(); i++) {
+                        JSONObject post_json = aryJson.getJSONObject(i);
+                        String imageUrl = post_json.getString("image");
+                        if (!imageUrl.equals("")) {
+                            URL myImageUrl = new URL(imageUrl);
+                            HttpURLConnection imgConn = (HttpURLConnection) myImageUrl.openConnection();
+                            InputStream imgStream = imgConn.getInputStream();
+                            Bitmap imageBitmap = BitmapFactory.decodeStream(imgStream);
+                            bitmapList.add(imageBitmap);
+                            imgStream.close();
+                        }
+                    }
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return bitmapList;
+        }
 
         @Override
         protected void onPostExecute(List<Bitmap> images) {
@@ -216,7 +258,6 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(getApplicationContext(), "게시글 업로드 실패!", Toast.LENGTH_LONG).show();
                 }
             } else {
-                // 다운로드 처리
                 if (images == null || images.isEmpty()) {
                     textView.setText("불러올 이미지가 없습니다.");
                 } else {
@@ -228,8 +269,5 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
-        //...생략...
-        /*private class PutPost extends AsyncTask<String, Void, Void> {//...여기에코드추가...}
-         */
     }
 }
